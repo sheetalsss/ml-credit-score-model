@@ -1,23 +1,58 @@
 import joblib
 import numpy as np
 import pandas as pd
+import os
 from sklearn.preprocessing import MinMaxScaler
 
 # Path to the saved model and its components
 MODEL_PATH = 'artifacts/model_data.joblib'
 
-# Load the model and its components
-model_data = joblib.load(MODEL_PATH)
-model = model_data['model']
-scaler = model_data['scaler']
-features = model_data['features']
-cols_to_scale = model_data['cols_to_scale']
+
+def load_model_data():
+    """Load model data with proper error handling"""
+    try:
+        # Check if file exists
+        if not os.path.exists(MODEL_PATH):
+            raise FileNotFoundError(f"Model file not found at: {MODEL_PATH}")
+
+        # Try to load the model
+        model_data = joblib.load(MODEL_PATH)
+
+        # Validate the loaded data
+        required_keys = ['model', 'scaler', 'features', 'cols_to_scale']
+        for key in required_keys:
+            if key not in model_data:
+                raise ValueError(f"Missing key in model data: {key}")
+
+        return model_data
+
+    except Exception as e:
+        raise Exception(f"Error loading model: {str(e)}")
+
+
+# Load the model data
+try:
+    model_data = load_model_data()
+    model = model_data['model']
+    scaler = model_data['scaler']
+    features = model_data['features']
+    cols_to_scale = model_data['cols_to_scale']
+except Exception as e:
+    # This will help debug in Streamlit
+    print(f"Model loading failed: {e}")
+    model = None
+    scaler = None
+    features = None
+    cols_to_scale = None
 
 
 def prepare_input(age, income, loan_amount, loan_tenure_months, avg_dpd_per_delinquency,
-                    delinquency_ratio, credit_utilization_ratio, num_open_accounts, residence_type,
-                    loan_purpose, loan_type):
-    # Create a dictionary with input values and dummy values for missing features
+                  delinquency_ratio, credit_utilization_ratio, num_open_accounts, residence_type,
+                  loan_purpose, loan_type):
+    if model is None:
+        raise ValueError("Model not loaded. Cannot prepare input.")
+
+    # Create a dictionary with input values
     input_data = {
         'age': age,
         'loan_tenure_months': loan_tenure_months,
@@ -32,27 +67,22 @@ def prepare_input(age, income, loan_amount, loan_tenure_months, avg_dpd_per_deli
         'loan_purpose_Home': 1 if loan_purpose == 'Home' else 0,
         'loan_purpose_Personal': 1 if loan_purpose == 'Personal' else 0,
         'loan_type_Unsecured': 1 if loan_type == 'Unsecured' else 0,
-        # additional dummy fields just for scaling purpose
-        'number_of_dependants': 1,  # Dummy value
-        'years_at_current_address': 1,  # Dummy value
-        'zipcode': 1,  # Dummy value
-        'sanction_amount': 1,  # Dummy value
-        'processing_fee': 1,  # Dummy value
-        'gst': 1,  # Dummy value
-        'net_disbursement': 1,  # Computed dummy value
-        'principal_outstanding': 1,  # Dummy value
-        'bank_balance_at_application': 1,  # Dummy value
-        'number_of_closed_accounts': 1,  # Dummy value
-        'enquiry_count': 1  # Dummy value
+        # Dummy values for missing features
+        'number_of_dependants': 1,
+        'years_at_current_address': 1,
+        'zipcode': 1,
+        'sanction_amount': 1,
+        'processing_fee': 1,
+        'gst': 1,
+        'net_disbursement': 1,
+        'principal_outstanding': 1,
+        'bank_balance_at_application': 1,
+        'number_of_closed_accounts': 1,
+        'enquiry_count': 1
     }
 
-    # Ensure all columns for features and cols_to_scale are present
     df = pd.DataFrame([input_data])
-
-    # Ensure only required columns for scaling are scaled
     df[cols_to_scale] = scaler.transform(df[cols_to_scale])
-
-    # Ensure the DataFrame contains only the features expected by the model
     df = df[features]
 
     return df
@@ -61,28 +91,27 @@ def prepare_input(age, income, loan_amount, loan_tenure_months, avg_dpd_per_deli
 def predict(age, income, loan_amount, loan_tenure_months, avg_dpd_per_delinquency,
             delinquency_ratio, credit_utilization_ratio, num_open_accounts,
             residence_type, loan_purpose, loan_type):
-    # Prepare input data
-    input_df = prepare_input(age, income, loan_amount, loan_tenure_months, avg_dpd_per_delinquency,
-                             delinquency_ratio, credit_utilization_ratio, num_open_accounts, residence_type,
-                             loan_purpose, loan_type)
+    if model is None:
+        return 0.5, 600, "Error: Model not loaded"
 
-    probability, credit_score, rating = calculate_credit_score(input_df)
+    try:
+        input_df = prepare_input(age, income, loan_amount, loan_tenure_months, avg_dpd_per_delinquency,
+                                 delinquency_ratio, credit_utilization_ratio, num_open_accounts, residence_type,
+                                 loan_purpose, loan_type)
 
-    return probability, credit_score, rating
+        probability, credit_score, rating = calculate_credit_score(input_df)
+        return probability, credit_score, rating
+
+    except Exception as e:
+        return 0.5, 600, f"Error: {str(e)}"
 
 
 def calculate_credit_score(input_df, base_score=300, scale_length=600):
     x = np.dot(input_df.values, model.coef_.T) + model.intercept_
-
-    # Apply the logistic function to calculate the probability
     default_probability = 1 / (1 + np.exp(-x))
-
     non_default_probability = 1 - default_probability
-
-    # Convert the probability to a credit score, scaled to fit within 300 to 900
     credit_score = base_score + non_default_probability.flatten() * scale_length
 
-    # Determine the rating category based on the credit score
     def get_rating(score):
         if 300 <= score < 500:
             return 'Poor'
@@ -93,8 +122,7 @@ def calculate_credit_score(input_df, base_score=300, scale_length=600):
         elif 750 <= score <= 900:
             return 'Excellent'
         else:
-            return 'Undefined'  # in case of any unexpected score
+            return 'Undefined'
 
     rating = get_rating(credit_score[0])
-
     return default_probability.flatten()[0], int(credit_score[0]), rating
