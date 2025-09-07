@@ -1,4 +1,4 @@
-import joblib
+from joblib import load
 import numpy as np
 import pandas as pd
 import os
@@ -16,7 +16,7 @@ def load_model_data():
             raise FileNotFoundError(f"Model file not found at: {MODEL_PATH}")
 
         # Try to load the model
-        model_data = joblib.load(MODEL_PATH)
+        model_data = load(MODEL_PATH)
 
         # Validate the loaded data
         required_keys = ['model', 'scaler', 'features', 'cols_to_scale']
